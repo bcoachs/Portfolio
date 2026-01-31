@@ -69,16 +69,25 @@ const setupSingleReview = () => {
         }
 
         updateSingleReviewStatus('Kennzahlen werden geladen...', 'neutral');
-        renderSingleReviewResults(null, null);
+        renderSingleReviewResults();
 
-        const [metrics, rules] = await Promise.all([fetchMetrics(value), loadRules()]);
+        const [metricsResponse, rules] = await Promise.all([fetchMetrics(value), loadRules()]);
         if (!rules) {
             updateSingleReviewStatus('Regelwerk konnte nicht geladen werden.', 'fail');
             return;
         }
 
-        const evaluation = evaluateStock(metrics, rules);
-        renderSingleReviewResults(metrics, evaluation);
+        if (metricsResponse.errorMessage) {
+            updateSingleReviewStatus(metricsResponse.errorMessage, 'fail');
+            renderSingleReviewResults(metricsResponse);
+            return;
+        }
+
+        const evaluation = evaluateStock(metricsResponse.metrics, rules);
+        renderSingleReviewResults({
+            ...metricsResponse,
+            evaluation
+        });
         const statusMessage = evaluation.role
             ? `Empfohlene Rolle: ${evaluation.role}`
             : 'Keine passende Rolle gefunden.';
@@ -105,14 +114,23 @@ const updateSingleReviewStatus = (message, status) => {
     }
 };
 
-const renderSingleReviewResults = (metrics, evaluation) => {
+const renderSingleReviewResults = (data = {}) => {
     const resultsElement = document.getElementById('single-review-results');
     if (!resultsElement) {
         return;
     }
 
+    const { metrics, evaluation, companyName, symbol, errorMessage } = data;
+    const nameLabel = companyName || symbol;
+    const nameMarkup = nameLabel ? `<div class="single-review-company">${nameLabel}</div>` : '';
+    const symbolMarkup =
+        symbol && companyName && symbol !== companyName
+            ? `<div class="single-review-symbol">Symbol: ${symbol}</div>`
+            : '';
+    const errorMarkup = errorMessage ? `<div class="single-review-error">${errorMessage}</div>` : '';
+
     if (!metrics || !evaluation) {
-        resultsElement.innerHTML = '';
+        resultsElement.innerHTML = `${nameMarkup}${symbolMarkup}${errorMarkup}`;
         return;
     }
 
@@ -135,6 +153,8 @@ const renderSingleReviewResults = (metrics, evaluation) => {
     const roleStatus = evaluation.role ? 'success' : 'fail';
 
     resultsElement.innerHTML = `
+        ${nameMarkup}
+        ${symbolMarkup}
         <div>
             <strong>Rollen-Check:</strong>
             <span class="status-chip ${roleStatus}">${roleText}</span>
@@ -203,32 +223,55 @@ const fetchMetrics = async (value) => {
         roic: null
     };
 
+    const searchResult = await resolveSymbol(value);
+    if (searchResult.errorMessage && !searchResult.symbol) {
+        return {
+            metrics,
+            companyName: searchResult.companyName ?? value,
+            symbol: searchResult.symbol,
+            errorMessage: searchResult.errorMessage
+        };
+    }
+
+    const symbolToUse = searchResult.symbol || value;
     const modules = [
         'summaryDetail',
         'defaultKeyStatistics',
         'financialData',
-        'cashflowStatementHistory'
+        'cashflowStatementHistory',
+        'price'
     ].join(',');
 
     try {
         const response = await fetch(
             `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
-                value
+                symbolToUse
             )}?modules=${modules}`
         );
         if (!response.ok) {
-            return metrics;
+            return {
+                metrics,
+                companyName: searchResult.companyName ?? value,
+                symbol: symbolToUse,
+                errorMessage: 'Kennzahlen konnten nicht geladen werden (API-Fehler oder Rate-Limit).'
+            };
         }
         const payload = await response.json();
         const result = payload?.quoteSummary?.result?.[0];
         if (!result) {
-            return metrics;
+            return {
+                metrics,
+                companyName: searchResult.companyName ?? value,
+                symbol: symbolToUse,
+                errorMessage: 'Kennzahlen nicht gefunden. Bitte Ticker/ISIN prüfen.'
+            };
         }
 
         const summary = result.summaryDetail || {};
         const stats = result.defaultKeyStatistics || {};
         const financial = result.financialData || {};
         const cashflowHistory = result.cashflowStatementHistory?.cashflowStatements || [];
+        const price = result.price || {};
 
         metrics.dividendYield = toNumber(summary.dividendYield?.raw ?? stats.trailingAnnualDividendYield?.raw);
         metrics.dividendGrowth = calculateDividendCagr(cashflowHistory);
@@ -238,10 +281,45 @@ const fetchMetrics = async (value) => {
         metrics.interestCoverage = calculateInterestCoverage(financial);
         metrics.roic = toNumber(financial.returnOnInvestedCapital?.raw ?? financial.roic?.raw);
 
-        return metrics;
+        return {
+            metrics,
+            companyName:
+                price.longName || price.shortName || searchResult.companyName || price.symbol || symbolToUse,
+            symbol: price.symbol || symbolToUse,
+            errorMessage: null
+        };
     } catch (error) {
         console.error('Fehler beim Abruf der Kennzahlen', error);
-        return metrics;
+        return {
+            metrics,
+            companyName: searchResult.companyName ?? value,
+            symbol: symbolToUse,
+            errorMessage: 'Kennzahlen konnten nicht geladen werden (Netzwerkfehler).'
+        };
+    }
+};
+
+const resolveSymbol = async (value) => {
+    try {
+        const response = await fetch(
+            `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(value)}&quotesCount=1`
+        );
+        if (!response.ok) {
+            return { symbol: value, companyName: null, errorMessage: null };
+        }
+        const payload = await response.json();
+        const quote = payload?.quotes?.[0];
+        if (!quote?.symbol) {
+            return {
+                symbol: null,
+                companyName: null,
+                errorMessage: 'Kein passendes Symbol gefunden. Bitte Ticker/ISIN prüfen.'
+            };
+        }
+        return { symbol: quote.symbol, companyName: quote.shortname || quote.longname || null, errorMessage: null };
+    } catch (error) {
+        console.error('Fehler bei der Symbolsuche', error);
+        return { symbol: value, companyName: null, errorMessage: null };
     }
 };
 

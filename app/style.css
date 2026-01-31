@@ -101,6 +101,22 @@ section {
     gap: 1rem;
 }
 
+.single-review-company {
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #003c78;
+}
+
+.single-review-symbol {
+    color: #5b6b7b;
+    font-size: 0.95rem;
+}
+
+.single-review-error {
+    color: #b00020;
+    font-weight: bold;
+}
+
 .kpi-table {
     width: 100%;
     border-collapse: collapse;
