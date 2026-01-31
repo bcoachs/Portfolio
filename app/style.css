@@ -37,6 +37,114 @@ section {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+.single-review-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.single-review-form label {
+    font-weight: bold;
+    color: #003c78;
+}
+
+.single-review-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.single-review-actions input {
+    flex: 1 1 220px;
+    padding: 0.75rem;
+    border-radius: 10px;
+    border: 1px solid rgba(0, 60, 120, 0.4);
+    font-size: 1rem;
+}
+
+.single-review-actions button {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 10px;
+    background: #003c78;
+    color: #fff;
+    font-weight: bold;
+    cursor: pointer;
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.single-review-actions button:hover {
+    background: #0050a6;
+    transform: translateY(-1px);
+}
+
+.single-review-status {
+    margin-bottom: 1rem;
+    font-weight: bold;
+}
+
+.single-review-status.success {
+    color: #0b6b2f;
+}
+
+.single-review-status.fail {
+    color: #b00020;
+}
+
+.single-review-status.neutral {
+    color: #333;
+}
+
+.single-review-results {
+    display: grid;
+    gap: 1rem;
+}
+
+.kpi-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.kpi-table th,
+.kpi-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+}
+
+.kpi-table thead {
+    background: rgba(0, 60, 120, 0.12);
+    color: #003c78;
+}
+
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.status-chip.success {
+    background: rgba(0, 128, 0, 0.15);
+    color: #0b6b2f;
+}
+
+.status-chip.fail {
+    background: rgba(176, 0, 32, 0.15);
+    color: #b00020;
+}
+
+.status-chip.neutral {
+    background: rgba(60, 60, 60, 0.12);
+    color: #333;
+}
+
 #upload {
     display: flex;
     flex-direction: column;

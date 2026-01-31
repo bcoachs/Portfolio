@@ -21,6 +21,20 @@ const REQUIRED_PORTFOLIO_COLUMNS = [
 
 const REQUIRED_GERMAN_COLUMNS = ['ID', 'Name', 'Anteil (in %)', 'Wert'];
 
+const RULES_PATH = '../rules/default_rules.json';
+
+const METRIC_LABELS = {
+    dividendYield: 'Dividendenrendite',
+    dividendGrowth: 'Dividendenwachstum (5J CAGR)',
+    fcfPayoutRatio: 'FCF-Payout-Ratio',
+    epsPayoutRatio: 'EPS-Payout-Ratio',
+    netDebtToEbitda: 'Net Debt / EBITDA',
+    interestCoverage: 'Zinsdeckungsgrad',
+    roic: 'ROIC'
+};
+
+let cachedRules = null;
+
 /**
  * Erstellt (falls nötig) das CSV-Uploadfeld und registriert den Listener.
  */
@@ -37,6 +51,346 @@ const setupCsvUpload = () => {
     }
 
     fileInput.addEventListener('change', handleCsvUpload);
+};
+
+const setupSingleReview = () => {
+    const input = document.getElementById('singleReviewInput');
+    const button = document.getElementById('singleReviewButton');
+    if (!input || !button) {
+        return;
+    }
+
+    const runEvaluation = async () => {
+        const value = input.value.trim();
+        if (!value) {
+            updateSingleReviewStatus('Bitte geben Sie ein Ticker-Symbol oder eine ISIN ein.', 'fail');
+            renderSingleReviewResults(null, null);
+            return;
+        }
+
+        updateSingleReviewStatus('Kennzahlen werden geladen...', 'neutral');
+        renderSingleReviewResults(null, null);
+
+        const [metrics, rules] = await Promise.all([fetchMetrics(value), loadRules()]);
+        if (!rules) {
+            updateSingleReviewStatus('Regelwerk konnte nicht geladen werden.', 'fail');
+            return;
+        }
+
+        const evaluation = evaluateStock(metrics, rules);
+        renderSingleReviewResults(metrics, evaluation);
+        const statusMessage = evaluation.role
+            ? `Empfohlene Rolle: ${evaluation.role}`
+            : 'Keine passende Rolle gefunden.';
+        updateSingleReviewStatus(statusMessage, evaluation.role ? 'success' : 'fail');
+    };
+
+    button.addEventListener('click', runEvaluation);
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            runEvaluation();
+        }
+    });
+};
+
+const updateSingleReviewStatus = (message, status) => {
+    const statusElement = document.getElementById('single-review-status');
+    if (!statusElement) {
+        return;
+    }
+    statusElement.textContent = message;
+    statusElement.classList.remove('success', 'fail', 'neutral');
+    if (status) {
+        statusElement.classList.add(status);
+    }
+};
+
+const renderSingleReviewResults = (metrics, evaluation) => {
+    const resultsElement = document.getElementById('single-review-results');
+    if (!resultsElement) {
+        return;
+    }
+
+    if (!metrics || !evaluation) {
+        resultsElement.innerHTML = '';
+        return;
+    }
+
+    const metricRows = Object.entries(METRIC_LABELS)
+        .map(([key, label]) => {
+            const value = metrics[key];
+            const formatted = formatMetricValue(key, value);
+            const status = evaluation.kpiStatuses[key] || 'neutral';
+            return `
+                <tr>
+                    <td>${label}</td>
+                    <td>${formatted}</td>
+                    <td><span class="status-chip ${status}">${statusLabel(status)}</span></td>
+                </tr>
+            `;
+        })
+        .join('');
+
+    const roleText = evaluation.role ? evaluation.role : 'Nicht geeignet';
+    const roleStatus = evaluation.role ? 'success' : 'fail';
+
+    resultsElement.innerHTML = `
+        <div>
+            <strong>Rollen-Check:</strong>
+            <span class="status-chip ${roleStatus}">${roleText}</span>
+        </div>
+        <table class="kpi-table">
+            <thead>
+                <tr>
+                    <th>KPI</th>
+                    <th>Wert</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${metricRows}
+            </tbody>
+        </table>
+    `;
+};
+
+const statusLabel = (status) => {
+    switch (status) {
+        case 'success':
+            return 'OK';
+        case 'fail':
+            return 'Rot';
+        default:
+            return 'k. A.';
+    }
+};
+
+const formatMetricValue = (key, value) => {
+    if (value === null || Number.isNaN(value)) {
+        return 'n/a';
+    }
+    if (key === 'dividendYield' || key === 'dividendGrowth' || key === 'fcfPayoutRatio' || key === 'epsPayoutRatio' || key === 'roic') {
+        return `${(value * 100).toFixed(2)} %`;
+    }
+    return value.toFixed(2);
+};
+
+const loadRules = async () => {
+    if (cachedRules) {
+        return cachedRules;
+    }
+    try {
+        const response = await fetch(RULES_PATH);
+        if (!response.ok) {
+            return null;
+        }
+        cachedRules = await response.json();
+        return cachedRules;
+    } catch (error) {
+        console.error('Fehler beim Laden der Regeln', error);
+        return null;
+    }
+};
+
+const fetchMetrics = async (value) => {
+    const metrics = {
+        dividendYield: null,
+        dividendGrowth: null,
+        fcfPayoutRatio: null,
+        epsPayoutRatio: null,
+        netDebtToEbitda: null,
+        interestCoverage: null,
+        roic: null
+    };
+
+    const modules = [
+        'summaryDetail',
+        'defaultKeyStatistics',
+        'financialData',
+        'cashflowStatementHistory'
+    ].join(',');
+
+    try {
+        const response = await fetch(
+            `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
+                value
+            )}?modules=${modules}`
+        );
+        if (!response.ok) {
+            return metrics;
+        }
+        const payload = await response.json();
+        const result = payload?.quoteSummary?.result?.[0];
+        if (!result) {
+            return metrics;
+        }
+
+        const summary = result.summaryDetail || {};
+        const stats = result.defaultKeyStatistics || {};
+        const financial = result.financialData || {};
+        const cashflowHistory = result.cashflowStatementHistory?.cashflowStatements || [];
+
+        metrics.dividendYield = toNumber(summary.dividendYield?.raw ?? stats.trailingAnnualDividendYield?.raw);
+        metrics.dividendGrowth = calculateDividendCagr(cashflowHistory);
+        metrics.fcfPayoutRatio = calculateFcfPayout(summary, stats, financial);
+        metrics.epsPayoutRatio = calculateEpsPayout(summary, stats);
+        metrics.netDebtToEbitda = safeDivide(financial.netDebt?.raw, financial.ebitda?.raw);
+        metrics.interestCoverage = calculateInterestCoverage(financial);
+        metrics.roic = toNumber(financial.returnOnInvestedCapital?.raw ?? financial.roic?.raw);
+
+        return metrics;
+    } catch (error) {
+        console.error('Fehler beim Abruf der Kennzahlen', error);
+        return metrics;
+    }
+};
+
+const toNumber = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+const safeDivide = (numerator, denominator) => {
+    const num = toNumber(numerator);
+    const den = toNumber(denominator);
+    if (num === null || den === null || den === 0) {
+        return null;
+    }
+    return num / den;
+};
+
+const calculateDividendCagr = (cashflowHistory) => {
+    if (!cashflowHistory?.length) {
+        return null;
+    }
+    const dividends = cashflowHistory
+        .map((entry) => Math.abs(Number(entry.dividendsPaid?.raw)))
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .slice(0, 6);
+    if (dividends.length < 2) {
+        return null;
+    }
+    const latest = dividends[0];
+    const earliest = dividends[dividends.length - 1];
+    const years = dividends.length - 1;
+    if (!latest || !earliest || years <= 0) {
+        return null;
+    }
+    return Math.pow(latest / earliest, 1 / years) - 1;
+};
+
+const calculateFcfPayout = (summary, stats, financial) => {
+    const dividendRate = toNumber(summary.dividendRate?.raw ?? stats.trailingAnnualDividendRate?.raw);
+    const shares = toNumber(stats.sharesOutstanding?.raw);
+    const freeCashflow = toNumber(financial.freeCashflow?.raw);
+    if (dividendRate === null || shares === null || freeCashflow === null) {
+        return null;
+    }
+    const totalDividends = dividendRate * shares;
+    return safeDivide(totalDividends, freeCashflow);
+};
+
+const calculateEpsPayout = (summary, stats) => {
+    const dividendRate = toNumber(summary.dividendRate?.raw ?? stats.trailingAnnualDividendRate?.raw);
+    const eps = toNumber(stats.trailingEps?.raw);
+    if (dividendRate === null || eps === null) {
+        return null;
+    }
+    return safeDivide(dividendRate, eps);
+};
+
+const calculateInterestCoverage = (financial) => {
+    const ebitda = toNumber(financial.ebitda?.raw);
+    const interestExpense = toNumber(financial.interestExpense?.raw);
+    if (ebitda === null || interestExpense === null || interestExpense === 0) {
+        return null;
+    }
+    return ebitda / Math.abs(interestExpense);
+};
+
+const evaluateStock = (metrics, rules) => {
+    const kpiThresholds = rules.kpi_thresholds || {};
+    const coreKpiStatuses = {
+        fcfPayoutRatio: compareMax(metrics.fcfPayoutRatio, kpiThresholds.fcf_payout_max),
+        epsPayoutRatio: compareMax(metrics.epsPayoutRatio, kpiThresholds.eps_payout_max),
+        netDebtToEbitda: compareMax(metrics.netDebtToEbitda, kpiThresholds.debt_to_ebitda_max),
+        interestCoverage: compareMin(metrics.interestCoverage, kpiThresholds.interest_coverage_min),
+        roic: compareMin(metrics.roic, kpiThresholds.roic_min)
+    };
+    const kpiStatuses = {
+        ...coreKpiStatuses,
+        dividendYield: 'neutral',
+        dividendGrowth: 'neutral'
+    };
+
+    const roleEntries = Object.entries(rules.roles || {});
+    let matchedRole = null;
+
+    for (const [roleName, roleRules] of roleEntries) {
+        const dividendYieldOk = isWithinRange(
+            metrics.dividendYield,
+            roleRules.dividend_yield_min,
+            roleRules.dividend_yield_max
+        );
+        const dividendGrowthOk = isWithinRange(
+            metrics.dividendGrowth,
+            roleRules.dividend_growth_min,
+            roleRules.dividend_growth_max
+        );
+        const kpiOk = Object.values(coreKpiStatuses).every((status) => status !== 'fail');
+        if (dividendYieldOk && dividendGrowthOk && kpiOk) {
+            matchedRole = roleName;
+            kpiStatuses.dividendYield = 'success';
+            kpiStatuses.dividendGrowth = 'success';
+            break;
+        }
+
+        kpiStatuses.dividendYield = dividendYieldOk ? 'success' : 'fail';
+        kpiStatuses.dividendGrowth = dividendGrowthOk ? 'success' : 'fail';
+    }
+
+    if (!matchedRole) {
+        kpiStatuses.dividendYield =
+            kpiStatuses.dividendYield === 'neutral' ? compareRange(metrics.dividendYield) : kpiStatuses.dividendYield;
+        kpiStatuses.dividendGrowth =
+            kpiStatuses.dividendGrowth === 'neutral' ? compareRange(metrics.dividendGrowth) : kpiStatuses.dividendGrowth;
+    }
+
+    return { role: matchedRole, kpiStatuses };
+};
+
+const isWithinRange = (value, min, max) => {
+    if (value === null) {
+        return false;
+    }
+    if (min !== null && min !== undefined && value < min) {
+        return false;
+    }
+    if (max !== null && max !== undefined && value > max) {
+        return false;
+    }
+    return true;
+};
+
+const compareMax = (value, max) => {
+    if (value === null || max === null || max === undefined) {
+        return 'neutral';
+    }
+    return value <= max ? 'success' : 'fail';
+};
+
+const compareMin = (value, min) => {
+    if (value === null || min === null || min === undefined) {
+        return 'neutral';
+    }
+    return value >= min ? 'success' : 'fail';
+};
+
+const compareRange = (value) => {
+    if (value === null) {
+        return 'neutral';
+    }
+    return 'success';
 };
 
 /**
@@ -219,4 +573,5 @@ const renderSummary = (records) => {
 
 document.addEventListener('DOMContentLoaded', () => {
     setupCsvUpload();
+    setupSingleReview();
 });
