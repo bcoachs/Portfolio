@@ -3,7 +3,7 @@
  * Diese Datei lädt eine CSV-Datei, wertet die Rollen aus und zeigt eine Zusammenfassung an.
  */
 
-const REQUIRED_COLUMNS = [
+const REQUIRED_PORTFOLIO_COLUMNS = [
     'Ticker',
     'Name',
     'Rolle',
@@ -18,6 +18,8 @@ const REQUIRED_COLUMNS = [
     'NetDebt_EBITDA',
     'Interest_Coverage'
 ];
+
+const REQUIRED_GERMAN_COLUMNS = ['ID', 'Name', 'Anteil (in %)', 'Wert'];
 
 /**
  * Erstellt (falls nötig) das CSV-Uploadfeld und registriert den Listener.
@@ -61,17 +63,29 @@ const handleCsvUpload = (event) => {
  * @param {string} csvText - CSV-Inhalt als Text.
  * @returns {Array<Object>} Array von Datensätzen.
  */
+const detectDelimiter = (csvText) => {
+    const firstLine = csvText.trim().split(/\r?\n/)[0] || '';
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const semicolonCount = (firstLine.match(/;/g) || []).length;
+    return semicolonCount > commaCount ? ';' : ',';
+};
+
 const parseCsv = (csvText) => {
+    const delimiter = detectDelimiter(csvText);
     if (window.Papa) {
-        const parsed = window.Papa.parse(csvText, { header: true, skipEmptyLines: true });
+        const parsed = window.Papa.parse(csvText, {
+            header: true,
+            skipEmptyLines: true,
+            delimiter
+        });
         return parsed.data;
     }
 
-    const lines = csvText.trim().split('\n');
-    const headers = lines.shift().split(',').map((header) => header.trim());
+    const lines = csvText.trim().split(/\r?\n/);
+    const headers = lines.shift().split(delimiter).map((header) => header.trim());
 
     return lines.map((line) => {
-        const values = line.split(',').map((value) => value.trim());
+        const values = line.split(delimiter).map((value) => value.trim());
         return headers.reduce((acc, header, index) => {
             acc[header] = values[index] ?? '';
             return acc;
@@ -94,9 +108,68 @@ const renderSummary = (records) => {
         return;
     }
 
-    const missingColumns = REQUIRED_COLUMNS.filter((column) => !(column in records[0]));
-    if (missingColumns.length) {
+    const hasGermanFormat = REQUIRED_GERMAN_COLUMNS.every((column) => column in records[0]);
+    const hasPortfolioFormat = REQUIRED_PORTFOLIO_COLUMNS.every((column) => column in records[0]);
+    if (!hasGermanFormat && !hasPortfolioFormat) {
+        const missingColumns = REQUIRED_PORTFOLIO_COLUMNS.filter((column) => !(column in records[0]));
         summaryElement.innerHTML = `<p class="error">Fehlende Spalten: ${missingColumns.join(', ')}</p>`;
+        return;
+    }
+
+    if (hasGermanFormat) {
+        const normalized = records
+            .map((record) => {
+                const percentRaw = String(record['Anteil (in %)'] ?? '').replace(',', '.');
+                const percentValue = Number(percentRaw);
+                const decimalShare = Number.isNaN(percentValue) ? 0 : percentValue / 100;
+                const valueRaw = String(record.Wert ?? '').replace(',', '.');
+                const value = Number(valueRaw) || 0;
+
+                return {
+                    id: record.ID ?? '',
+                    name: record.Name ?? '',
+                    percent: decimalShare,
+                    percentLabel: Number.isNaN(percentValue) ? '0.00' : percentValue.toFixed(2),
+                    value
+                };
+            })
+            .filter((record) => record.id || record.name);
+
+        const sorted = normalized
+            .sort((a, b) => {
+                if (a.percent === b.percent) {
+                    return b.value - a.value;
+                }
+                return b.percent - a.percent;
+            })
+            .slice(0, 100);
+
+        summaryElement.innerHTML = `
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Anteil %</th>
+                        <th>Wert</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${sorted
+                        .map(
+                            (row) => `
+                        <tr>
+                            <td>${row.id}</td>
+                            <td>${row.name}</td>
+                            <td>${row.percentLabel}</td>
+                            <td>${row.value.toFixed(2)}</td>
+                        </tr>
+                    `
+                        )
+                        .join('')}
+                </tbody>
+            </table>
+        `;
         return;
     }
 
