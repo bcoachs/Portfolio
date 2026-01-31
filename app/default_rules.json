@@ -1,0 +1,62 @@
+{
+    "portfolio": {
+        "cash_target_min": 0.05,
+        "cash_target_max": 0.10,
+        "max_position_start": 0.03,
+        "max_position_growth": 0.05,
+        "hard_position_cap": 0.07
+    },
+    "roles": {
+        "Freiheitsmotor": {
+            "target_weight_min": 0.35,
+            "target_weight_max": 0.40,
+            "dividend_yield_min": 0.03,
+            "dividend_yield_max": 0.05,
+            "dividend_growth_min": 0.02,
+            "dividend_growth_max": 0.06
+        },
+        "Wachstumsdividenden": {
+            "target_weight_min": 0.20,
+            "target_weight_max": 0.25,
+            "dividend_yield_min": 0.015,
+            "dividend_yield_max": 0.03,
+            "dividend_growth_min": 0.05,
+            "dividend_growth_max": 0.10
+        },
+        "RisingStars": {
+            "target_weight_min": 0.05,
+            "target_weight_max": 0.10,
+            "dividend_yield_min": 0.0,
+            "dividend_yield_max": 0.015,
+            "dividend_growth_min": 0.1,
+            "dividend_growth_max": null
+        },
+        "Sachwert": {
+            "target_weight_min": 0.10,
+            "target_weight_max": 0.15,
+            "dividend_yield_min": 0.04,
+            "dividend_yield_max": 0.07,
+            "dividend_growth_min": 0.0,
+            "dividend_growth_max": 0.04
+        },
+        "Stabilitaetsanker": {
+            "target_weight_min": 0.10,
+            "target_weight_max": 0.15,
+            "dividend_yield_min": 0.02,
+            "dividend_yield_max": 0.04,
+            "dividend_growth_min": 0.02,
+            "dividend_growth_max": 0.05
+        },
+        "ETF": {
+            "target_weight_min": 0.05,
+            "target_weight_max": 0.10
+        }
+    },
+    "kpi_thresholds": {
+        "fcf_payout_max": 0.70,
+        "eps_payout_max": 0.60,
+        "debt_to_ebitda_max": 2.5,
+        "interest_coverage_min": 5,
+        "roic_min": 0.12
+    }
+}
