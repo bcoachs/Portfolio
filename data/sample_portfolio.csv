@@ -1,0 +1,2 @@
+Ticker,Name,Rolle,Stueck,Einstandskurs,Marktwert,Waehrung,Dividendenrendite,Dividendenwachstum,ROIC,Payout_FCF,NetDebt_EBITDA,Interest_Coverage
+AAPL,Apple Inc.,Wachstumsdividenden,10,140.0,1500,USD,0.008,0.06,0.17,0.15,0.5,30
