@@ -21,7 +21,7 @@ const REQUIRED_PORTFOLIO_COLUMNS = [
 
 const REQUIRED_GERMAN_COLUMNS = ['ID', 'Name', 'Anteil (in %)', 'Wert'];
 
-const RULES_PATH = '../rules/default_rules.json';
+const RULES_PATH = 'default_rules.json';
 
 const METRIC_LABELS = {
     dividendYield: 'Dividendenrendite',
