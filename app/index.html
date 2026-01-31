@@ -13,6 +13,7 @@
         <ul>
             <li><a href="#overview">Übersicht</a></li>
             <li><a href="#review">Inventur</a></li>
+            <li><a href="#single-review">Einzelwert-Beurteilung</a></li>
             <li><a href="#admin">Einstellungen</a></li>
         </ul>
     </nav>
@@ -28,6 +29,20 @@
         <section id="review">
             <h2>Inventur</h2>
             <div id="review-list"></div>
+        </section>
+        <section id="single-review">
+            <h2>Einzelwert-Beurteilung</h2>
+            <div class="single-review-form">
+                <label for="singleReviewInput">Ticker-Symbol oder ISIN</label>
+                <div class="single-review-actions">
+                    <input type="text" id="singleReviewInput" placeholder="z. B. AAPL oder US0378331005">
+                    <button type="button" id="singleReviewButton">Prüfen</button>
+                </div>
+            </div>
+            <div id="single-review-status" class="single-review-status">
+                Geben Sie einen Wert ein und klicken Sie auf „Prüfen“.
+            </div>
+            <div id="single-review-results" class="single-review-results"></div>
         </section>
         <section id="admin">
             <h2>Einstellungen</h2>
