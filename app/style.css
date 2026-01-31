@@ -36,3 +36,64 @@ section {
     backdrop-filter: blur(3px);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
+
+#upload {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+#upload label {
+    font-weight: bold;
+    color: #003c78;
+}
+
+#csvFileInput {
+    padding: 0.75rem;
+    border-radius: 12px;
+    border: 1px solid rgba(0, 60, 120, 0.4);
+    background: rgba(255, 255, 255, 0.5);
+    color: #003c78;
+    font-size: 1rem;
+    min-height: 48px;
+    cursor: pointer;
+}
+
+#csvFileInput:hover {
+    border-color: rgba(0, 60, 120, 0.7);
+}
+
+.summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 6px 16px rgba(0, 60, 120, 0.12);
+}
+
+.summary-table th,
+.summary-table td {
+    padding: 0.85rem 1rem;
+    text-align: left;
+}
+
+.summary-table thead {
+    background: rgba(0, 60, 120, 0.15);
+    color: #003c78;
+    font-weight: bold;
+}
+
+.summary-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.7);
+}
+
+.summary-table tbody tr:hover {
+    background: rgba(0, 60, 120, 0.08);
+}
+
+.error {
+    color: #b00020;
+    font-weight: bold;
+}
