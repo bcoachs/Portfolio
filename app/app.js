@@ -24,8 +24,6 @@ const REQUIRED_GERMAN_COLUMNS = ['ID', 'Name', 'Anteil (in %)', 'Wert'];
 const RULES_PATH = 'default_rules.json';
 
 const YFINANCE_ENDPOINT = '/api/metrics';
-const CACHE_EXPIRY_DAYS = 7;
-
 const METRIC_LABELS = {
     dividendYield: 'Dividendenrendite',
     dividendGrowth: 'Dividendenwachstum (5J CAGR)',
@@ -39,7 +37,6 @@ const METRIC_LABELS = {
 let cachedRules = null;
 let showSourceDates = true;
 
-const fundamentalCache = {};
 const lastQueries = [];
 
 /**
@@ -163,17 +160,21 @@ const renderSingleReviewResults = (data = {}) => {
         return;
     }
 
-    const { metrics, evaluation, companyName, symbol, errorMessage } = data;
+    const { metrics, evaluation, companyName, symbol, errorMessage, source, fetchedAt } = data;
     const nameLabel = companyName || symbol;
     const nameMarkup = nameLabel ? `<div class="single-review-company">${nameLabel}</div>` : '';
     const symbolMarkup =
         symbol && companyName && symbol !== companyName
             ? `<div class="single-review-symbol">Symbol: ${symbol}</div>`
             : '';
+    const sourceMarkup =
+        showSourceDates && source && fetchedAt
+            ? `<div class="single-review-source">Quelle: ${source} · Stand: ${fetchedAt}</div>`
+            : '';
     const errorMarkup = errorMessage ? `<div class="single-review-error">${errorMessage}</div>` : '';
 
     if (!metrics || !evaluation) {
-        resultsElement.innerHTML = `${nameMarkup}${symbolMarkup}${errorMarkup}`;
+        resultsElement.innerHTML = `${nameMarkup}${symbolMarkup}${sourceMarkup}${errorMarkup}`;
         return;
     }
 
@@ -198,6 +199,7 @@ const renderSingleReviewResults = (data = {}) => {
     resultsElement.innerHTML = `
         ${nameMarkup}
         ${symbolMarkup}
+        ${sourceMarkup}
         <div>
             <strong>Rollen-Check:</strong>
             <span class="status-chip ${roleStatus}">${roleText}</span>
@@ -238,7 +240,10 @@ const formatMetricValue = (key, metric) => {
         formatted = `${(value * 100).toFixed(2)} %`;
     }
     if (showSourceDates) {
-        const meta = metric?.source && metric?.date ? ` <span class="metric-meta">(${metric.source}, ${metric.date})</span>` : '';
+        const meta =
+            metric?.source && metric?.date
+                ? ` <span class="metric-meta">(${metric.source}, ${metric.date})</span>`
+                : '';
         return `${formatted}${meta}`;
     }
     return formatted;
@@ -277,18 +282,6 @@ const updateLastQueries = (symbol) => {
     updateLastQueriesDisplay();
 };
 
-const isFresh = (dateString) => {
-    if (!dateString) {
-        return false;
-    }
-    const timestamp = new Date(dateString).getTime();
-    if (Number.isNaN(timestamp)) {
-        return false;
-    }
-    const ageMs = Date.now() - timestamp;
-    return ageMs < CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
-};
-
 const parseFetchPayload = async (response) => {
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
@@ -298,70 +291,115 @@ const parseFetchPayload = async (response) => {
     return text ? { message: text } : null;
 };
 
+const getHttpErrorLabel = (status, statusText) => {
+    if (status === 404) {
+        return 'HTTP 404: /api/metrics nicht gefunden';
+    }
+    if (status === 502) {
+        return 'HTTP 502: Datenanbieter nicht erreichbar';
+    }
+    return `HTTP ${status}${statusText ? `: ${statusText}` : ''}`;
+};
+
+const buildErrorDetails = (payload) => {
+    if (!payload) {
+        return '';
+    }
+    const parts = [];
+    if (payload.error?.message) {
+        parts.push(payload.error.message);
+    }
+    if (payload.error?.details) {
+        parts.push(payload.error.details);
+    }
+    if (payload.errorMessage) {
+        parts.push(payload.errorMessage);
+    }
+    if (payload.message) {
+        parts.push(payload.message);
+    }
+    return parts.filter(Boolean).join(' | ');
+};
+
 const fetchYFinanceEndpoint = async (symbol) => {
     let response;
     try {
         response = await fetch(`${YFINANCE_ENDPOINT}?symbol=${encodeURIComponent(symbol)}`);
     } catch (error) {
-        const networkError = new Error(`Netzwerkfehler beim Abruf der Kennzahlen: ${error.message || 'Unbekannter Fehler'}.`);
+        const networkError = new Error(
+            `Netzwerkfehler beim Abruf der Kennzahlen: ${error.message || 'Unbekannter Fehler'}.`
+        );
         networkError.cause = error;
         throw networkError;
     }
 
     const payload = await parseFetchPayload(response);
     if (!response.ok) {
-        const serverMessage = payload?.errorMessage || payload?.message;
-        const statusLabel = `HTTP ${response.status} ${response.statusText}`.trim();
-        const details = [serverMessage, statusLabel].filter(Boolean).join(' | ');
-        const requestError = new Error(
-            `Kennzahlen konnten nicht geladen werden.${details ? ` Details: ${details}` : ''}`
-        );
+        const statusLabel = getHttpErrorLabel(response.status, response.statusText);
+        const details = buildErrorDetails(payload);
+        const requestError = new Error(statusLabel);
         requestError.status = response.status;
         requestError.statusText = response.statusText;
         requestError.payload = payload;
+        requestError.details = details;
         throw requestError;
     }
 
     return payload;
 };
 
-const buildMetricEntry = (value, date) => ({
+const buildMetricEntry = (value, date, source) => ({
     value: value ?? null,
-    source: 'yfinance',
+    source: source || 'yahoo-finance2',
     date
 });
 
-const buildEmptyMetrics = (date) => ({
-    dividendYield: buildMetricEntry(null, date),
-    epsPayout: buildMetricEntry(null, date),
-    fcfPayout: buildMetricEntry(null, date),
-    debtToEbitda: buildMetricEntry(null, date),
-    interestCoverage: buildMetricEntry(null, date),
-    roic: buildMetricEntry(null, date),
-    dividendGrowth: buildMetricEntry(null, date)
+const buildEmptyMetrics = (date, source) => ({
+    dividendYield: buildMetricEntry(null, date, source),
+    epsPayout: buildMetricEntry(null, date, source),
+    fcfPayout: buildMetricEntry(null, date, source),
+    debtToEbitda: buildMetricEntry(null, date, source),
+    interestCoverage: buildMetricEntry(null, date, source),
+    roic: buildMetricEntry(null, date, source),
+    dividendGrowth: buildMetricEntry(null, date, source)
 });
+
+const normalizeMetricsPayload = (payload) => {
+    const data = payload?.data || {};
+    const source = payload?.source || 'yahoo-finance2';
+    const fallbackDate = payload?.fetchedAt ? payload.fetchedAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    const wrap = (entry) => buildMetricEntry(entry?.value ?? null, entry?.asOf || fallbackDate, entry?.source || source);
+
+    return {
+        metrics: {
+            dividendYield: wrap(data.dividendYield),
+            epsPayout: wrap(data.epsPayout),
+            fcfPayout: wrap(data.fcfPayout),
+            debtToEbitda: wrap(data.debtToEbitda),
+            interestCoverage: wrap(data.interestCoverage),
+            roic: wrap(data.roic),
+            dividendGrowth: wrap(data.dividendGrowth)
+        },
+        companyName: payload?.companyName || payload?.symbol || '',
+        symbol: payload?.symbol || '',
+        fetchedAt: payload?.fetchedAt || '',
+        source,
+        cache: payload?.cache || {}
+    };
+};
 
 const fetchMetricsYFinance = async (value) => {
     const symbol = value.trim().toUpperCase();
-    const today = new Date().toISOString().slice(0, 10);
     updateLastQueries(symbol);
 
-    const cached = fundamentalCache[symbol];
-    if (cached && isFresh(cached.fetchedAt)) {
-        return cached.data;
-    }
-
-    const emptyMetrics = buildEmptyMetrics(today);
+    const fallbackDate = new Date().toISOString().slice(0, 10);
+    const emptyMetrics = buildEmptyMetrics(fallbackDate);
 
     try {
         const response = await fetchYFinanceEndpoint(symbol);
+        const normalized = normalizeMetricsPayload(response);
 
-        fundamentalCache[symbol] = {
-            data: response,
-            fetchedAt: new Date().toISOString()
-        };
-
-        return response;
+        return normalized;
     } catch (error) {
         console.error('Fehler beim Abruf der Kennzahlen', {
             error,
@@ -371,22 +409,16 @@ const fetchMetricsYFinance = async (value) => {
             payload: error?.payload
         });
         const errorDetails = [];
-        if (error?.payload?.errorMessage) {
-            errorDetails.push(`Server: ${error.payload.errorMessage}`);
-        }
-        if (error?.status) {
-            errorDetails.push(`Status: HTTP ${error.status} ${error.statusText || ''}`.trim());
-        }
-        if (!error?.payload?.errorMessage && error?.message) {
-            errorDetails.push(`Details: ${error.message}`);
+        if (error?.details) {
+            errorDetails.push(error.details);
         }
         return {
             metrics: emptyMetrics,
             companyName: symbol,
             symbol,
-            errorMessage: `Kennzahlen konnten nicht geladen werden für "${symbol}". ${
+            errorMessage: `${error?.message || 'Kennzahlen konnten nicht geladen werden.'} ${
                 errorDetails.length
-                    ? `Hinweise: ${errorDetails.join(' | ')}`
+                    ? `Details: ${errorDetails.join(' | ')}`
                     : 'Bitte prüfen Sie Symbol/ISIN und die Erreichbarkeit des Backends.'
             }`
         };
