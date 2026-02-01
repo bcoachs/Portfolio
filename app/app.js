@@ -23,17 +23,25 @@ const REQUIRED_GERMAN_COLUMNS = ['ID', 'Name', 'Anteil (in %)', 'Wert'];
 
 const RULES_PATH = 'default_rules.json';
 
+const FMP_API_KEY = 'q2s7M4ZXaNHeQUmAFKuYB7Z1nYDDLtB9';
+const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3';
+const CACHE_EXPIRY_DAYS = 7;
+
 const METRIC_LABELS = {
     dividendYield: 'Dividendenrendite',
     dividendGrowth: 'Dividendenwachstum (5J CAGR)',
-    fcfPayoutRatio: 'FCF-Payout-Ratio',
-    epsPayoutRatio: 'EPS-Payout-Ratio',
-    netDebtToEbitda: 'Net Debt / EBITDA',
+    fcfPayout: 'FCF-Payout-Ratio',
+    epsPayout: 'EPS-Payout-Ratio',
+    debtToEbitda: 'Net Debt / EBITDA',
     interestCoverage: 'Zinsdeckungsgrad',
     roic: 'ROIC'
 };
 
 let cachedRules = null;
+let showSourceDates = true;
+
+const fundamentalCache = {};
+const lastQueries = [];
 
 /**
  * Erstellt (falls nötig) das CSV-Uploadfeld und registriert den Listener.
@@ -71,7 +79,7 @@ const setupSingleReview = () => {
         updateSingleReviewStatus('Kennzahlen werden geladen...', 'neutral');
         renderSingleReviewResults();
 
-        const [metricsResponse, rules] = await Promise.all([fetchMetrics(value), loadRules()]);
+        const [metricsResponse, rules] = await Promise.all([fetchMetricsFMP(value), loadRules()]);
         if (!rules) {
             updateSingleReviewStatus('Regelwerk konnte nicht geladen werden.', 'fail');
             return;
@@ -100,6 +108,42 @@ const setupSingleReview = () => {
             runEvaluation();
         }
     });
+};
+
+const setupAdminForm = () => {
+    const adminForm = document.getElementById('admin-form');
+    if (!adminForm) {
+        return;
+    }
+
+    adminForm.innerHTML = `
+        <div class="admin-field">
+            <label>
+                <input type="checkbox" id="toggle-source-dates" ${showSourceDates ? 'checked' : ''}>
+                Quellen & Daten anzeigen
+            </label>
+        </div>
+        <div id="last-queries" class="admin-last-queries"></div>
+    `;
+
+    const toggle = document.getElementById('toggle-source-dates');
+    toggle?.addEventListener('change', (event) => {
+        showSourceDates = event.target.checked;
+    });
+
+    updateLastQueriesDisplay();
+};
+
+const updateLastQueriesDisplay = () => {
+    const container = document.getElementById('last-queries');
+    if (!container) {
+        return;
+    }
+    if (!lastQueries.length) {
+        container.textContent = 'Noch keine Abfragen durchgeführt.';
+        return;
+    }
+    container.innerHTML = `<strong>Letzte Symbole:</strong> ${lastQueries.join(', ')}`;
 };
 
 const updateSingleReviewStatus = (message, status) => {
@@ -136,8 +180,8 @@ const renderSingleReviewResults = (data = {}) => {
 
     const metricRows = Object.entries(METRIC_LABELS)
         .map(([key, label]) => {
-            const value = metrics[key];
-            const formatted = formatMetricValue(key, value);
+            const metric = metrics[key];
+            const formatted = formatMetricValue(key, metric);
             const status = evaluation.kpiStatuses[key] || 'neutral';
             return `
                 <tr>
@@ -185,14 +229,20 @@ const statusLabel = (status) => {
     }
 };
 
-const formatMetricValue = (key, value) => {
+const formatMetricValue = (key, metric) => {
+    const value = metric?.value ?? null;
     if (value === null || Number.isNaN(value)) {
         return 'n/a';
     }
-    if (key === 'dividendYield' || key === 'dividendGrowth' || key === 'fcfPayoutRatio' || key === 'epsPayoutRatio' || key === 'roic') {
-        return `${(value * 100).toFixed(2)} %`;
+    let formatted = value.toFixed(2);
+    if (key === 'dividendYield' || key === 'dividendGrowth' || key === 'fcfPayout' || key === 'epsPayout' || key === 'roic') {
+        formatted = `${(value * 100).toFixed(2)} %`;
     }
-    return value.toFixed(2);
+    if (showSourceDates) {
+        const meta = metric?.source && metric?.date ? ` <span class="metric-meta">(${metric.source}, ${metric.date})</span>` : '';
+        return `${formatted}${meta}`;
+    }
+    return formatted;
 };
 
 const loadRules = async () => {
@@ -212,188 +262,150 @@ const loadRules = async () => {
     }
 };
 
-const fetchMetrics = async (value) => {
-    const metrics = {
-        dividendYield: null,
-        dividendGrowth: null,
-        fcfPayoutRatio: null,
-        epsPayoutRatio: null,
-        netDebtToEbitda: null,
-        interestCoverage: null,
-        roic: null
-    };
+const updateLastQueries = (symbol) => {
+    if (!symbol) {
+        return;
+    }
+    const normalized = symbol.toUpperCase();
+    const existingIndex = lastQueries.indexOf(normalized);
+    if (existingIndex !== -1) {
+        lastQueries.splice(existingIndex, 1);
+    }
+    lastQueries.unshift(normalized);
+    if (lastQueries.length > 10) {
+        lastQueries.length = 10;
+    }
+    updateLastQueriesDisplay();
+};
 
-    const searchResult = await resolveSymbol(value);
-    if (searchResult.errorMessage && !searchResult.symbol) {
-        return {
-            metrics,
-            companyName: searchResult.companyName ?? value,
-            symbol: searchResult.symbol,
-            errorMessage: searchResult.errorMessage
-        };
+const isFresh = (dateString) => {
+    if (!dateString) {
+        return false;
+    }
+    const timestamp = new Date(dateString).getTime();
+    if (Number.isNaN(timestamp)) {
+        return false;
+    }
+    const ageMs = Date.now() - timestamp;
+    return ageMs < CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+};
+
+const fetchFmpEndpoint = async (endpoint, errorMessage) => {
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+        throw new Error(errorMessage);
+    }
+    return response.json();
+};
+
+const fetchProfileFmp = (symbol) =>
+    fetchFmpEndpoint(
+        `${FMP_BASE_URL}/profile/${encodeURIComponent(symbol)}?apikey=${FMP_API_KEY}`,
+        'Netzwerkfehler beim Laden des Unternehmensprofils.'
+    );
+
+const fetchRatiosFmp = (symbol) =>
+    fetchFmpEndpoint(
+        `${FMP_BASE_URL}/ratios-ttm/${encodeURIComponent(symbol)}?apikey=${FMP_API_KEY}`,
+        'Netzwerkfehler beim Laden der Kennzahlen.'
+    );
+
+const fetchKeyMetricsFmp = (symbol) =>
+    fetchFmpEndpoint(
+        `${FMP_BASE_URL}/key-metrics/${encodeURIComponent(symbol)}?limit=1&apikey=${FMP_API_KEY}`,
+        'Netzwerkfehler beim Laden der Kennzahlen.'
+    );
+
+const buildMetricEntry = (value, date) => ({
+    value: value ?? null,
+    source: 'FMP',
+    date
+});
+
+const buildEmptyMetrics = (date) => ({
+    dividendYield: buildMetricEntry(null, date),
+    epsPayout: buildMetricEntry(null, date),
+    fcfPayout: buildMetricEntry(null, date),
+    debtToEbitda: buildMetricEntry(null, date),
+    interestCoverage: buildMetricEntry(null, date),
+    roic: buildMetricEntry(null, date),
+    dividendGrowth: buildMetricEntry(null, date)
+});
+
+const fetchMetricsFMP = async (value) => {
+    const symbol = value.trim().toUpperCase();
+    const today = new Date().toISOString().slice(0, 10);
+    updateLastQueries(symbol);
+
+    const cached = fundamentalCache[symbol];
+    if (cached && isFresh(cached.fetchedAt)) {
+        return cached.data;
     }
 
-    const symbolToUse = searchResult.symbol || value;
-    const modules = [
-        'summaryDetail',
-        'defaultKeyStatistics',
-        'financialData',
-        'cashflowStatementHistory',
-        'price'
-    ].join(',');
+    const emptyMetrics = buildEmptyMetrics(today);
 
     try {
-        const response = await fetch(
-            `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
-                symbolToUse
-            )}?modules=${modules}`
-        );
-        if (!response.ok) {
+        const [profileData, ratiosData, metricsData] = await Promise.all([
+            fetchProfileFmp(symbol),
+            fetchRatiosFmp(symbol),
+            fetchKeyMetricsFmp(symbol)
+        ]);
+
+        const profile = profileData?.[0] ?? null;
+        const ratios = ratiosData?.[0] ?? null;
+        const metrics = metricsData?.[0] ?? null;
+
+        if (!profile && !ratios && !metrics) {
             return {
-                metrics,
-                companyName: searchResult.companyName ?? value,
-                symbol: symbolToUse,
-                errorMessage: 'Kennzahlen konnten nicht geladen werden (API-Fehler oder Rate-Limit).'
-            };
-        }
-        const payload = await response.json();
-        const result = payload?.quoteSummary?.result?.[0];
-        if (!result) {
-            return {
-                metrics,
-                companyName: searchResult.companyName ?? value,
-                symbol: symbolToUse,
-                errorMessage: 'Kennzahlen nicht gefunden. Bitte Ticker/ISIN prüfen.'
+                metrics: emptyMetrics,
+                companyName: symbol,
+                symbol,
+                errorMessage: 'Symbol nicht gefunden. Bitte Ticker prüfen.'
             };
         }
 
-        const summary = result.summaryDetail || {};
-        const stats = result.defaultKeyStatistics || {};
-        const financial = result.financialData || {};
-        const cashflowHistory = result.cashflowStatementHistory?.cashflowStatements || [];
-        const price = result.price || {};
-
-        metrics.dividendYield = toNumber(summary.dividendYield?.raw ?? stats.trailingAnnualDividendYield?.raw);
-        metrics.dividendGrowth = calculateDividendCagr(cashflowHistory);
-        metrics.fcfPayoutRatio = calculateFcfPayout(summary, stats, financial);
-        metrics.epsPayoutRatio = calculateEpsPayout(summary, stats);
-        metrics.netDebtToEbitda = safeDivide(financial.netDebt?.raw, financial.ebitda?.raw);
-        metrics.interestCoverage = calculateInterestCoverage(financial);
-        metrics.roic = toNumber(financial.returnOnInvestedCapital?.raw ?? financial.roic?.raw);
-
-        return {
-            metrics,
-            companyName:
-                price.longName || price.shortName || searchResult.companyName || price.symbol || symbolToUse,
-            symbol: price.symbol || symbolToUse,
+        const response = {
+            metrics: {
+                dividendYield: buildMetricEntry(ratios?.dividendYieldTTM ?? null, today),
+                epsPayout: buildMetricEntry(ratios?.dividendPayoutRatioTTM ?? null, today),
+                fcfPayout: buildMetricEntry(null, today),
+                debtToEbitda: buildMetricEntry(metrics?.netDebtToEBITDA ?? null, today),
+                interestCoverage: buildMetricEntry(ratios?.interestCoverageRatioTTM ?? null, today),
+                roic: buildMetricEntry(metrics?.returnOnInvestedCapital ?? null, today),
+                dividendGrowth: buildMetricEntry(null, today)
+            },
+            companyName: profile?.companyName ?? symbol,
+            symbol: profile?.symbol ?? symbol,
             errorMessage: null
         };
+
+        fundamentalCache[symbol] = {
+            data: response,
+            fetchedAt: new Date().toISOString()
+        };
+
+        return response;
     } catch (error) {
         console.error('Fehler beim Abruf der Kennzahlen', error);
         return {
-            metrics,
-            companyName: searchResult.companyName ?? value,
-            symbol: symbolToUse,
-            errorMessage: 'Kennzahlen konnten nicht geladen werden (Netzwerkfehler).'
+            metrics: emptyMetrics,
+            companyName: symbol,
+            symbol,
+            errorMessage: 'Netzwerkfehler beim Laden der Kennzahlen.'
         };
     }
 };
 
-const resolveSymbol = async (value) => {
-    try {
-        const response = await fetch(
-            `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(value)}&quotesCount=1`
-        );
-        if (!response.ok) {
-            return { symbol: value, companyName: null, errorMessage: null };
-        }
-        const payload = await response.json();
-        const quote = payload?.quotes?.[0];
-        if (!quote?.symbol) {
-            return {
-                symbol: null,
-                companyName: null,
-                errorMessage: 'Kein passendes Symbol gefunden. Bitte Ticker/ISIN prüfen.'
-            };
-        }
-        return { symbol: quote.symbol, companyName: quote.shortname || quote.longname || null, errorMessage: null };
-    } catch (error) {
-        console.error('Fehler bei der Symbolsuche', error);
-        return { symbol: value, companyName: null, errorMessage: null };
-    }
-};
-
-const toNumber = (value) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-};
-
-const safeDivide = (numerator, denominator) => {
-    const num = toNumber(numerator);
-    const den = toNumber(denominator);
-    if (num === null || den === null || den === 0) {
-        return null;
-    }
-    return num / den;
-};
-
-const calculateDividendCagr = (cashflowHistory) => {
-    if (!cashflowHistory?.length) {
-        return null;
-    }
-    const dividends = cashflowHistory
-        .map((entry) => Math.abs(Number(entry.dividendsPaid?.raw)))
-        .filter((value) => Number.isFinite(value) && value > 0)
-        .slice(0, 6);
-    if (dividends.length < 2) {
-        return null;
-    }
-    const latest = dividends[0];
-    const earliest = dividends[dividends.length - 1];
-    const years = dividends.length - 1;
-    if (!latest || !earliest || years <= 0) {
-        return null;
-    }
-    return Math.pow(latest / earliest, 1 / years) - 1;
-};
-
-const calculateFcfPayout = (summary, stats, financial) => {
-    const dividendRate = toNumber(summary.dividendRate?.raw ?? stats.trailingAnnualDividendRate?.raw);
-    const shares = toNumber(stats.sharesOutstanding?.raw);
-    const freeCashflow = toNumber(financial.freeCashflow?.raw);
-    if (dividendRate === null || shares === null || freeCashflow === null) {
-        return null;
-    }
-    const totalDividends = dividendRate * shares;
-    return safeDivide(totalDividends, freeCashflow);
-};
-
-const calculateEpsPayout = (summary, stats) => {
-    const dividendRate = toNumber(summary.dividendRate?.raw ?? stats.trailingAnnualDividendRate?.raw);
-    const eps = toNumber(stats.trailingEps?.raw);
-    if (dividendRate === null || eps === null) {
-        return null;
-    }
-    return safeDivide(dividendRate, eps);
-};
-
-const calculateInterestCoverage = (financial) => {
-    const ebitda = toNumber(financial.ebitda?.raw);
-    const interestExpense = toNumber(financial.interestExpense?.raw);
-    if (ebitda === null || interestExpense === null || interestExpense === 0) {
-        return null;
-    }
-    return ebitda / Math.abs(interestExpense);
-};
+const getMetricValue = (metrics, key) => metrics?.[key]?.value ?? null;
 
 const evaluateStock = (metrics, rules) => {
     const kpiThresholds = rules.kpi_thresholds || {};
     const coreKpiStatuses = {
-        fcfPayoutRatio: compareMax(metrics.fcfPayoutRatio, kpiThresholds.fcf_payout_max),
-        epsPayoutRatio: compareMax(metrics.epsPayoutRatio, kpiThresholds.eps_payout_max),
-        netDebtToEbitda: compareMax(metrics.netDebtToEbitda, kpiThresholds.debt_to_ebitda_max),
-        interestCoverage: compareMin(metrics.interestCoverage, kpiThresholds.interest_coverage_min),
-        roic: compareMin(metrics.roic, kpiThresholds.roic_min)
+        fcfPayout: compareMax(getMetricValue(metrics, 'fcfPayout'), kpiThresholds.fcf_payout_max),
+        epsPayout: compareMax(getMetricValue(metrics, 'epsPayout'), kpiThresholds.eps_payout_max),
+        debtToEbitda: compareMax(getMetricValue(metrics, 'debtToEbitda'), kpiThresholds.debt_to_ebitda_max),
+        interestCoverage: compareMin(getMetricValue(metrics, 'interestCoverage'), kpiThresholds.interest_coverage_min),
+        roic: compareMin(getMetricValue(metrics, 'roic'), kpiThresholds.roic_min)
     };
     const kpiStatuses = {
         ...coreKpiStatuses,
@@ -406,12 +418,12 @@ const evaluateStock = (metrics, rules) => {
 
     for (const [roleName, roleRules] of roleEntries) {
         const dividendYieldOk = isWithinRange(
-            metrics.dividendYield,
+            getMetricValue(metrics, 'dividendYield'),
             roleRules.dividend_yield_min,
             roleRules.dividend_yield_max
         );
         const dividendGrowthOk = isWithinRange(
-            metrics.dividendGrowth,
+            getMetricValue(metrics, 'dividendGrowth'),
             roleRules.dividend_growth_min,
             roleRules.dividend_growth_max
         );
@@ -429,9 +441,13 @@ const evaluateStock = (metrics, rules) => {
 
     if (!matchedRole) {
         kpiStatuses.dividendYield =
-            kpiStatuses.dividendYield === 'neutral' ? compareRange(metrics.dividendYield) : kpiStatuses.dividendYield;
+            kpiStatuses.dividendYield === 'neutral'
+                ? compareRange(getMetricValue(metrics, 'dividendYield'))
+                : kpiStatuses.dividendYield;
         kpiStatuses.dividendGrowth =
-            kpiStatuses.dividendGrowth === 'neutral' ? compareRange(metrics.dividendGrowth) : kpiStatuses.dividendGrowth;
+            kpiStatuses.dividendGrowth === 'neutral'
+                ? compareRange(getMetricValue(metrics, 'dividendGrowth'))
+                : kpiStatuses.dividendGrowth;
     }
 
     return { role: matchedRole, kpiStatuses };
@@ -652,4 +668,5 @@ const renderSummary = (records) => {
 document.addEventListener('DOMContentLoaded', () => {
     setupCsvUpload();
     setupSingleReview();
+    setupAdminForm();
 });
