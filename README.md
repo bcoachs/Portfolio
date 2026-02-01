@@ -18,4 +18,14 @@ Diese Projektstruktur dient als Ausgangspunkt für dein Dividendenportfolio‑To
 3. **Daten importieren**: Exportiere dein Portfolio aus Parqet als CSV und lade es über die App hoch.
 4. **Inventur nutzen**: Im Inventur‑Modus werden automatisch Positionen angezeigt, die überprüft werden müssen (z. B. Gewicht > 5 %, Dividendenkürzung). Führe die Reviews durch und speichere die Ergebnisse.
 
+## Lokales Backend für Kennzahlen
+
+Damit das Frontend `/api/metrics` nutzen kann, starte das Flask‑Backend:
+
+```bash
+python app/server.py
+```
+
+Der Server lauscht auf `http://localhost:5000` und nutzt `yfinance`, um die Kennzahlen für `?symbol=...` zu liefern.
+
 Starte mit den bereitgestellten Dateien und passe sie Schritt für Schritt an deine Anforderungen an. Viel Erfolg!

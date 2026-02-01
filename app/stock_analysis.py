@@ -307,6 +307,26 @@ def analyze_stock(
 def build_metrics_response(symbol: str) -> Dict[str, Any]:
     """Build the JSON payload expected by the web app using yfinance."""
     yf_ticker = yf.Ticker(symbol)
+    return _build_metrics_payload(yf_ticker, symbol)
+
+
+def build_metrics_response_with_session(symbol: str) -> Dict[str, Any]:
+    """Build the JSON payload using a configured session and ISIN resolution."""
+    session = _create_yfinance_session()
+    resolved_symbol = _resolve_isin_to_ticker(symbol.strip().upper(), session)
+    try:
+        yf_ticker = yf.Ticker(resolved_symbol, session=session)
+    except Exception:
+        return {
+            "metrics": {},
+            "companyName": resolved_symbol,
+            "symbol": resolved_symbol,
+            "errorMessage": "Kennzahlen konnten nicht geladen werden.",
+        }
+    return _build_metrics_payload(yf_ticker, resolved_symbol)
+
+
+def _build_metrics_payload(yf_ticker: yf.Ticker, fallback_symbol: str) -> Dict[str, Any]:
     info = _safe_info(yf_ticker)
     cashflow = getattr(yf_ticker, "cashflow", None)
     income_stmt = getattr(yf_ticker, "income_stmt", None)
@@ -327,7 +347,7 @@ def build_metrics_response(symbol: str) -> Dict[str, Any]:
     if roic is None:
         roic = info.get("returnOnEquity")
 
-    payload = {
+    return {
         "metrics": {
             "dividendYield": _metric_entry(info.get("dividendYield")),
             "epsPayout": _metric_entry(info.get("payoutRatio")),
@@ -337,11 +357,10 @@ def build_metrics_response(symbol: str) -> Dict[str, Any]:
             "roic": _metric_entry(roic),
             "dividendGrowth": _metric_entry(None),
         },
-        "companyName": info.get("shortName") or info.get("longName") or symbol,
-        "symbol": info.get("symbol") or symbol,
+        "companyName": info.get("shortName") or info.get("longName") or fallback_symbol,
+        "symbol": info.get("symbol") or fallback_symbol,
         "errorMessage": None,
     }
-    return payload
 
 
 def _metric_entry(value: Optional[float]) -> Dict[str, Any]:
