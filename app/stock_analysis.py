@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional, Union
 
 import pandas as pd
+import requests
 import yfinance as yf
 
 
@@ -22,6 +23,83 @@ def _safe_info(ticker: yf.Ticker) -> Dict[str, Any]:
     except Exception:
         return {}
     return info
+
+
+def _create_yfinance_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/121.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+        }
+    )
+    return session
+
+
+def _looks_like_isin(symbol: str) -> bool:
+    if len(symbol) != 12:
+        return False
+    return symbol[:2].isalpha() and symbol.isalnum()
+
+
+def _resolve_isin_to_ticker(symbol: str, session: requests.Session) -> str:
+    if not _looks_like_isin(symbol):
+        return symbol
+    try:
+        response = session.get(
+            "https://query2.finance.yahoo.com/v1/finance/search",
+            params={"q": symbol, "quotesCount": 6, "newsCount": 0},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return symbol
+
+    quotes = payload.get("quotes") or []
+    for quote in quotes:
+        if quote.get("quoteType") == "EQUITY" and quote.get("symbol"):
+            return str(quote["symbol"])
+    if quotes and quotes[0].get("symbol"):
+        return str(quotes[0]["symbol"])
+    return symbol
+
+
+def _value_or_na(value: Optional[Any]) -> Union[float, str, Any]:
+    if value is None:
+        return "N/A"
+    return value
+
+
+def get_stock_data(symbol: str) -> Dict[str, Any]:
+    """
+    Fetch stock data via yfinance using a configured requests session.
+    Supports ISIN inputs by resolving them to ticker symbols.
+    Missing data is returned as 'N/A' instead of raising errors.
+    """
+    session = _create_yfinance_session()
+    resolved_symbol = _resolve_isin_to_ticker(symbol.strip().upper(), session)
+    try:
+        yf_ticker = yf.Ticker(resolved_symbol, session=session)
+        info = _safe_info(yf_ticker)
+    except Exception:
+        info = {}
+
+    return {
+        "symbol": resolved_symbol,
+        "companyName": _value_or_na(info.get("shortName") or info.get("longName")),
+        "currency": _value_or_na(info.get("currency")),
+        "exchange": _value_or_na(info.get("exchange")),
+        "sector": _value_or_na(info.get("sector")),
+        "industry": _value_or_na(info.get("industry")),
+        "currentPrice": _value_or_na(info.get("currentPrice")),
+        "marketCap": _value_or_na(info.get("marketCap")),
+    }
 
 
 def _latest_column(df: Optional[pd.DataFrame]) -> Optional[Any]:
