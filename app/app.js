@@ -23,8 +23,7 @@ const REQUIRED_GERMAN_COLUMNS = ['ID', 'Name', 'Anteil (in %)', 'Wert'];
 
 const RULES_PATH = 'default_rules.json';
 
-const FMP_API_KEY = 'q2s7M4ZXaNHeQUmAFKuYB7Z1nYDDLtB9';
-const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3';
+const YFINANCE_ENDPOINT = '/api/metrics';
 const CACHE_EXPIRY_DAYS = 7;
 
 const METRIC_LABELS = {
@@ -79,7 +78,7 @@ const setupSingleReview = () => {
         updateSingleReviewStatus('Kennzahlen werden geladen...', 'neutral');
         renderSingleReviewResults();
 
-        const [metricsResponse, rules] = await Promise.all([fetchMetricsFMP(value), loadRules()]);
+        const [metricsResponse, rules] = await Promise.all([fetchMetricsYFinance(value), loadRules()]);
         if (!rules) {
             updateSingleReviewStatus('Regelwerk konnte nicht geladen werden.', 'fail');
             return;
@@ -290,35 +289,17 @@ const isFresh = (dateString) => {
     return ageMs < CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 };
 
-const fetchFmpEndpoint = async (endpoint, errorMessage) => {
-    const response = await fetch(endpoint);
+const fetchYFinanceEndpoint = async (symbol) => {
+    const response = await fetch(`${YFINANCE_ENDPOINT}?symbol=${encodeURIComponent(symbol)}`);
     if (!response.ok) {
-        throw new Error(errorMessage);
+        throw new Error('Netzwerkfehler beim Laden der Kennzahlen.');
     }
     return response.json();
 };
 
-const fetchProfileFmp = (symbol) =>
-    fetchFmpEndpoint(
-        `${FMP_BASE_URL}/profile/${encodeURIComponent(symbol)}?apikey=${FMP_API_KEY}`,
-        'Netzwerkfehler beim Laden des Unternehmensprofils.'
-    );
-
-const fetchRatiosFmp = (symbol) =>
-    fetchFmpEndpoint(
-        `${FMP_BASE_URL}/ratios-ttm/${encodeURIComponent(symbol)}?apikey=${FMP_API_KEY}`,
-        'Netzwerkfehler beim Laden der Kennzahlen.'
-    );
-
-const fetchKeyMetricsFmp = (symbol) =>
-    fetchFmpEndpoint(
-        `${FMP_BASE_URL}/key-metrics/${encodeURIComponent(symbol)}?limit=1&apikey=${FMP_API_KEY}`,
-        'Netzwerkfehler beim Laden der Kennzahlen.'
-    );
-
 const buildMetricEntry = (value, date) => ({
     value: value ?? null,
-    source: 'FMP',
+    source: 'yfinance',
     date
 });
 
@@ -332,7 +313,7 @@ const buildEmptyMetrics = (date) => ({
     dividendGrowth: buildMetricEntry(null, date)
 });
 
-const fetchMetricsFMP = async (value) => {
+const fetchMetricsYFinance = async (value) => {
     const symbol = value.trim().toUpperCase();
     const today = new Date().toISOString().slice(0, 10);
     updateLastQueries(symbol);
@@ -345,39 +326,7 @@ const fetchMetricsFMP = async (value) => {
     const emptyMetrics = buildEmptyMetrics(today);
 
     try {
-        const [profileData, ratiosData, metricsData] = await Promise.all([
-            fetchProfileFmp(symbol),
-            fetchRatiosFmp(symbol),
-            fetchKeyMetricsFmp(symbol)
-        ]);
-
-        const profile = profileData?.[0] ?? null;
-        const ratios = ratiosData?.[0] ?? null;
-        const metrics = metricsData?.[0] ?? null;
-
-        if (!profile && !ratios && !metrics) {
-            return {
-                metrics: emptyMetrics,
-                companyName: symbol,
-                symbol,
-                errorMessage: 'Symbol nicht gefunden. Bitte Ticker prüfen.'
-            };
-        }
-
-        const response = {
-            metrics: {
-                dividendYield: buildMetricEntry(ratios?.dividendYieldTTM ?? null, today),
-                epsPayout: buildMetricEntry(ratios?.dividendPayoutRatioTTM ?? null, today),
-                fcfPayout: buildMetricEntry(null, today),
-                debtToEbitda: buildMetricEntry(metrics?.netDebtToEBITDA ?? null, today),
-                interestCoverage: buildMetricEntry(ratios?.interestCoverageRatioTTM ?? null, today),
-                roic: buildMetricEntry(metrics?.returnOnInvestedCapital ?? null, today),
-                dividendGrowth: buildMetricEntry(null, today)
-            },
-            companyName: profile?.companyName ?? symbol,
-            symbol: profile?.symbol ?? symbol,
-            errorMessage: null
-        };
+        const response = await fetchYFinanceEndpoint(symbol);
 
         fundamentalCache[symbol] = {
             data: response,
