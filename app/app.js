@@ -289,12 +289,40 @@ const isFresh = (dateString) => {
     return ageMs < CACHE_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 };
 
-const fetchYFinanceEndpoint = async (symbol) => {
-    const response = await fetch(`${YFINANCE_ENDPOINT}?symbol=${encodeURIComponent(symbol)}`);
-    if (!response.ok) {
-        throw new Error('Netzwerkfehler beim Laden der Kennzahlen.');
+const parseFetchPayload = async (response) => {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        return response.json();
     }
-    return response.json();
+    const text = await response.text();
+    return text ? { message: text } : null;
+};
+
+const fetchYFinanceEndpoint = async (symbol) => {
+    let response;
+    try {
+        response = await fetch(`${YFINANCE_ENDPOINT}?symbol=${encodeURIComponent(symbol)}`);
+    } catch (error) {
+        const networkError = new Error(`Netzwerkfehler beim Abruf der Kennzahlen: ${error.message || 'Unbekannter Fehler'}.`);
+        networkError.cause = error;
+        throw networkError;
+    }
+
+    const payload = await parseFetchPayload(response);
+    if (!response.ok) {
+        const serverMessage = payload?.errorMessage || payload?.message;
+        const statusLabel = `HTTP ${response.status} ${response.statusText}`.trim();
+        const details = [serverMessage, statusLabel].filter(Boolean).join(' | ');
+        const requestError = new Error(
+            `Kennzahlen konnten nicht geladen werden.${details ? ` Details: ${details}` : ''}`
+        );
+        requestError.status = response.status;
+        requestError.statusText = response.statusText;
+        requestError.payload = payload;
+        throw requestError;
+    }
+
+    return payload;
 };
 
 const buildMetricEntry = (value, date) => ({
@@ -335,12 +363,32 @@ const fetchMetricsYFinance = async (value) => {
 
         return response;
     } catch (error) {
-        console.error('Fehler beim Abruf der Kennzahlen', error);
+        console.error('Fehler beim Abruf der Kennzahlen', {
+            error,
+            symbol,
+            status: error?.status,
+            statusText: error?.statusText,
+            payload: error?.payload
+        });
+        const errorDetails = [];
+        if (error?.payload?.errorMessage) {
+            errorDetails.push(`Server: ${error.payload.errorMessage}`);
+        }
+        if (error?.status) {
+            errorDetails.push(`Status: HTTP ${error.status} ${error.statusText || ''}`.trim());
+        }
+        if (!error?.payload?.errorMessage && error?.message) {
+            errorDetails.push(`Details: ${error.message}`);
+        }
         return {
             metrics: emptyMetrics,
             companyName: symbol,
             symbol,
-            errorMessage: 'Netzwerkfehler beim Laden der Kennzahlen.'
+            errorMessage: `Kennzahlen konnten nicht geladen werden für "${symbol}". ${
+                errorDetails.length
+                    ? `Hinweise: ${errorDetails.join(' | ')}`
+                    : 'Bitte prüfen Sie Symbol/ISIN und die Erreichbarkeit des Backends.'
+            }`
         };
     }
 };
