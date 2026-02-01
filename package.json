@@ -1,0 +1,7 @@
+{
+  "name": "portfolio",
+  "private": true,
+  "dependencies": {
+    "yahoo-finance2": "^2.13.3"
+  }
+}
